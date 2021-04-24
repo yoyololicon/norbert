@@ -1,10 +1,6 @@
 import torch
 import math
-
-
-from torch._C import device, dtype
-from .contrib import compress_filter, smooth, residual_model
-from .contrib import reduce_interferences
+from .contrib import compress_filter
 
 
 def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
@@ -263,7 +259,8 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     # we need to refine the estimates. Scales down the estimates for
     # numerical stability
     max_abs = max(1, x.abs().max() * 0.1)
-    y = expectation_maximization(y / max_abs, x / max_abs, iterations, eps=eps)[0]
+    y = expectation_maximization(
+        y / max_abs, x / max_abs, iterations, eps=eps)[0]
     return y * max_abs
 
 

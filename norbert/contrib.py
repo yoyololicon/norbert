@@ -69,7 +69,7 @@ def residual_model(v, x, alpha=1, autoscale=False):
         v *= gain[..., None]
 
         # re-sum the sources to build the new current model
-        v_total = v_total = v.sum(-1)
+        v_total = v.sum(-1)
 
     # residual is difference between the observation and the model
     vr = (vx - v_total).relu()
