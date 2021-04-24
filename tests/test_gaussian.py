@@ -42,7 +42,7 @@ def X(request, nb_frames, nb_bins, nb_channels, dtype):
 
 @pytest.fixture
 def V(request, nb_frames, nb_bins, nb_channels, nb_sources):
-    return torch.rand(nb_frames, nb_bins, nb_channels, nb_sources)
+    return torch.rand(nb_frames, nb_bins, nb_channels, nb_sources, requires_grad=True)
 
 
 def test_shapes(V, X):
@@ -87,7 +87,8 @@ def test_residual_copy(X, V):
 
 
 def test_silent_sources(X, V):
-    V[..., :] = 0.0
+    with torch.no_grad():
+        V[..., :] = 0.0
     Y = norbert.softmask(V, X)
 
     assert X.shape == Y.shape[:-1]
@@ -100,9 +101,11 @@ def test_softmask(V, X):
     X = (X.shape[-1] * torch.ones(X.shape)).to(torch.complex128)
     Y = norbert.softmask(V, X)
     assert torch.allclose(Y.sum(-1), X)
+    Y.sum().backward()
 
 
 def test_wiener(V, X):
     X = (X.shape[-1] * torch.ones(X.shape)).to(torch.complex128)
     Y = norbert.wiener(V, X)
     assert torch.allclose(Y.sum(-1), X)
+    Y.sum().backward()
