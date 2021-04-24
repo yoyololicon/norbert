@@ -147,7 +147,7 @@ def reduce_interferences(v, thresh=0.6, slope=15):
     vsmooth = smooth(v.detach().cpu().numpy(), 10)
     vsmooth = torch.from_numpy(vsmooth).to(v.device).to(v.dtype)
     total_energy = eps + vsmooth.sum(-1, keepdim=True)
-    v = _logit(vsmooth / total_energy, 0.4, 15) * v
+    v = _logit(vsmooth / total_energy, thresh, slope) * v
     return v
 
 

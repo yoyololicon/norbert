@@ -1,6 +1,7 @@
 import norbert
 import musdb
 import numpy as np
+import torch
 import functools
 import museval
 import scipy
@@ -60,9 +61,13 @@ def oracle(track, separation_fn):
 
 if __name__ == '__main__':
     mus = musdb.DB(download=True)
+
+    def closure(v, x):
+        return norbert.softmask(torch.from_numpy(v), torch.from_numpy(x)).numpy()
+
     mus.run(
         functools.partial(
-            oracle, separation_fn=norbert.softmask
+            oracle, separation_fn=closure
         ),
         estimates_dir='test_wiener',
         subsets='test',
