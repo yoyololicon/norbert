@@ -143,13 +143,17 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
         Cxx = get_mix_model(v, R).add(regularization)
         inv_Cxx = _invert(Cxx, eps)
+        print(inv_Cxx.shape, v.shape, R.shape)
 
-        W = wiener_gain(
-            v.view(nb_frames, -1),
-            R.permute(0, 3, 1, 2).reshape(-1, nb_channels, nb_channels),
-            inv_Cxx
-        )
-        y = apply_filter(x, W)
+        y = []
+        for j in range(nb_sources):
+            W = wiener_gain(
+                v[..., j],
+                R[..., j],
+                inv_Cxx
+            )
+            y.append(apply_filter(x, W))
+        y = torch.stack(y, -1)
 
     return y, v, R
 
@@ -249,7 +253,7 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
 
     """
     if use_softmask:
-        y = softmask(v, x, eps=eps)
+        y = softmask(v, x)
     else:
         y = v * torch.exp(1j * torch.angle(x[..., None]))
 
@@ -433,6 +437,8 @@ def get_mix_model(v: torch.Tensor, R: torch.Tensor):
     Cxx: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         Covariance matrix for the mixture
     """
+    if R.is_complex():
+        v = v.to(R.dtype)
     Cxx = torch.einsum('nbs,bcds->nbcd', v, R)
     return Cxx
 

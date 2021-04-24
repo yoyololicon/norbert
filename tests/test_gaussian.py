@@ -1,4 +1,4 @@
-import numpy as np
+import torch
 import pytest
 import norbert
 
@@ -28,24 +28,21 @@ def nb_iterations(request):
     return request.param
 
 
-@pytest.fixture(params=[np.complex64, np.complex128])
+@pytest.fixture(params=[torch.complex64, torch.complex128])
 def dtype(request):
     return request.param
 
 
 @pytest.fixture
 def X(request, nb_frames, nb_bins, nb_channels, dtype):
-    Mix = np.random.random(
-        (nb_frames, nb_bins, nb_channels)
-    ) + np.random.random(
-        (nb_frames, nb_bins, nb_channels)
-    ) * 1j
-    return Mix.astype(dtype)
+    Mix = torch.randn(nb_frames, nb_bins, nb_channels) + \
+        torch.randn(nb_frames, nb_bins, nb_channels) * 1j
+    return Mix.to(dtype)
 
 
 @pytest.fixture
 def V(request, nb_frames, nb_bins, nb_channels, nb_sources):
-    return np.random.random((nb_frames, nb_bins, nb_channels, nb_sources))
+    return torch.rand(nb_frames, nb_bins, nb_channels, nb_sources)
 
 
 def test_shapes(V, X):
@@ -60,33 +57,33 @@ def test_shapes(V, X):
 
 
 def test_wiener_copy(X, V):
-    X0 = np.copy(X)
-    V0 = np.copy(V)
+    X0 = X.clone()
+    V0 = V.clone()
 
     _ = norbert.wiener(V, X)
 
-    assert np.allclose(X0, X)
-    assert np.allclose(V0, V)
+    assert torch.allclose(X0, X)
+    assert torch.allclose(V0, V)
 
 
 def test_softmask_copy(X, V):
-    X0 = np.copy(X)
-    V0 = np.copy(V)
+    X0 = X.clone()
+    V0 = V.clone()
 
     _ = norbert.softmask(V, X)
 
-    assert np.allclose(X0, X)
-    assert np.allclose(V0, V)
+    assert torch.allclose(X0, X)
+    assert torch.allclose(V0, V)
 
 
 def test_residual_copy(X, V):
-    X0 = np.copy(X)
-    V0 = np.copy(V)
+    X0 = X.clone()
+    V0 = V.clone()
 
     _ = norbert.residual_model(V, X)
 
-    assert np.allclose(X0, X)
-    assert np.allclose(V0, V)
+    assert torch.allclose(X0, X)
+    assert torch.allclose(V0, V)
 
 
 def test_silent_sources(X, V):
@@ -100,12 +97,12 @@ def test_silent_sources(X, V):
 
 
 def test_softmask(V, X):
-    X = (X.shape[-1] * np.ones(X.shape)).astype(np.complex128)
+    X = (X.shape[-1] * torch.ones(X.shape)).to(torch.complex128)
     Y = norbert.softmask(V, X)
-    assert np.allclose(Y.sum(-1), X)
+    assert torch.allclose(Y.sum(-1), X)
 
 
 def test_wiener(V, X):
-    X = (X.shape[-1] * np.ones(X.shape)).astype(np.complex128)
+    X = (X.shape[-1] * torch.ones(X.shape)).to(torch.complex128)
     Y = norbert.wiener(V, X)
-    assert np.allclose(Y.sum(-1), X)
+    assert torch.allclose(Y.sum(-1), X)

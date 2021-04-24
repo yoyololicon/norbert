@@ -1,10 +1,11 @@
-import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage.filters import gaussian_filter1d
 
 
 def _logit(W, threshold, slope):
-    return 1. / (1.0 + np.exp(-slope*(W-threshold)))
+    return 1. / (1.0 + torch.exp(-slope * (W - threshold)))
 
 
 def residual_model(v, x, alpha=1, autoscale=False):
@@ -21,10 +22,10 @@ def residual_model(v, x, alpha=1, autoscale=False):
 
     Parameters
     ----------
-    v: np.ndarray [shape=(nb_frames, nb_bins, {1, nb_channels}, nb_sources)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, {1, nb_channels}, nb_sources)]
         Estimated spectrograms for the sources
 
-    x: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
         complex mixture
 
     alpha: float [scalar]
@@ -38,7 +39,7 @@ def residual_model(v, x, alpha=1, autoscale=False):
 
     Returns
     -------
-    v: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_sources+1)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources+1)]
         Spectrograms of the sources, with an appended one for the residual.
 
     Note
@@ -52,32 +53,28 @@ def residual_model(v, x, alpha=1, autoscale=False):
     In other words, *you must have*: ``np.abs(x)**alpha`` homogeneous to `v`.
     """
     # to avoid dividing by zero
-    eps = np.finfo(v.dtype).eps
+    eps = torch.finfo(v.dtype).eps
 
     # spectrogram for the mixture
-    vx = np.maximum(eps, np.abs(x)**alpha)
+    vx = F.threshold(x.abs() ** alpha, eps, eps)
 
     # compute the total model as provided
-    v_total = np.sum(v, axis=-1)
+    v_total = v.sum(-1)
 
     if autoscale:
         # quick trick to scale the provided spectrograms to fit the mixture
-        nb_frames = x.shape[0]
-        gain = 0
-        weights = eps
-        for t in range(nb_frames):
-            gain = gain + vx[None, t] * v_total[None, t]
-            weights = weights + v_total[None, t]**2
+        gain = torch.sum(vx * v_total, 0)
+        weights = torch.sum(v_total * v_total, 0).add_(eps)
         gain /= weights
         v *= gain[..., None]
 
         # re-sum the sources to build the new current model
-        v_total = np.sum(v, axis=-1)
+        v_total = v_total = v.sum(-1)
 
     # residual is difference between the observation and the model
-    vr = np.maximum(0, vx - v_total)
+    vr = (vx - v_total).relu()
 
-    return np.concatenate((v, vr[..., None]), axis=3)
+    return torch.cat((v, vr[..., None]), axis=3)
 
 
 def smooth(v, width=1, temporal=False):
@@ -86,7 +83,7 @@ def smooth(v, width=1, temporal=False):
 
     Parameters
     ----------
-    v: np.ndarray [shape=(nb_frames, ...)]
+    v: torch.Tensor [shape=(nb_frames, ...)]
         input array
 
     sigma: int [scalar]
@@ -98,7 +95,7 @@ def smooth(v, width=1, temporal=False):
 
     Returns
     -------
-    result: np.ndarray [shape=(nb_frames, ...)]
+    result: torch.Tensor [shape=(nb_frames, ...)]
         filtered array
 
     """
@@ -128,7 +125,7 @@ def reduce_interferences(v, thresh=0.6, slope=15):
 
     Parameters
     ----------
-    v: np.ndarray [shape=(..., nb_sources)]
+    v: torch.Tensor [shape=(..., nb_sources)]
         non-negative data on which to apply interference reduction
 
     thresh: float [scalar]
@@ -142,14 +139,15 @@ def reduce_interferences(v, thresh=0.6, slope=15):
 
     Returns
     -------
-    v: np.ndarray [same shape as input]
+    v: torch.Tensor [same shape as input]
         `v` with reduced interferences
 
     """
-    eps = np.finfo(np.float32).eps
-    vsmooth = smooth(v, 10)
-    total_energy = eps + np.sum(vsmooth, axis=-1, keepdims=True)
-    v = _logit(vsmooth/total_energy, 0.4, 15) * v
+    eps = 1e-7
+    vsmooth = smooth(v.detach().cpu().numpy(), 10)
+    vsmooth = torch.from_numpy(vsmooth).to(v.device).to(v.dtype)
+    total_energy = eps + vsmooth.sum(-1, keepdim=True)
+    v = _logit(vsmooth / total_energy, 0.4, 15) * v
     return v
 
 
@@ -176,14 +174,14 @@ def compress_filter(W, thresh=0.6, slope=15):
 
     Returns
     -------
-    W: np.ndarray [same shape as input]
+    W: torch.Tensor [same shape as input]
         Compressed filter
     '''
 
-    eps = np.finfo(W).eps
+    eps = torch.finfo(W.dtype).eps
     nb_channels = W.shape[-1]
     if nb_channels > 1:
-        gains = np.trace(W, axis1=-2, axis2=-1)
+        gains = torch.einsum('...ii', W)
         W *= (_logit(gains, thresh, slope) / (eps + gains))[..., None, None]
     else:
         W = _logit(W, thresh, slope)
