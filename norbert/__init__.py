@@ -1,5 +1,8 @@
-import numpy as np
-import itertools
+import torch
+import math
+
+
+from torch._C import device, dtype
 from .contrib import compress_filter, smooth, residual_model
 from .contrib import reduce_interferences
 
@@ -52,10 +55,10 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
     Parameters
     ----------
-    y: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    y: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
         initial estimates for the sources
 
-    x: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
         complex STFT of the mixture signal
 
     iterations: int [scalar]
@@ -70,13 +73,13 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
     Returns
     -------
-    y: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    y: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
         estimated sources after iterations
 
-    v: np.ndarray [shape=(nb_frames, nb_bins, nb_sources)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_sources)]
         estimated power spectral densities
 
-    R: np.ndarray [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
+    R: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
         estimated spatial covariance matrices
 
 
@@ -113,41 +116,40 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
     """
     # to avoid dividing by zero
     if eps is None:
-        eps = np.finfo(np.real(x[0]).dtype).eps
+        eps = torch.finfo(x.dtype).eps
 
     # dimensions
     (nb_frames, nb_bins, nb_channels) = x.shape
     nb_sources = y.shape[-1]
 
     # allocate the spatial covariance matrices and PSD
-    R = np.zeros((nb_bins, nb_channels, nb_channels, nb_sources), x.dtype)
-    v = np.zeros((nb_frames, nb_bins, nb_sources))
+    # R = np.zeros((nb_bins, nb_channels, nb_channels, nb_sources), x.dtype)
+    # v = np.zeros((nb_frames, nb_bins, nb_sources))
 
     if verbose:
         print('Number of iterations: ', iterations)
-    regularization = np.sqrt(eps) * (
-            np.tile(np.eye(nb_channels, dtype=np.complex64),
-                    (1, nb_bins, 1, 1)))
+    regularization = math.sqrt(eps) * torch.eye(nb_channels, dtype=x.dtype,
+                                                device=x.device)
     for it in range(iterations):
         # constructing the mixture covariance matrix. Doing it with a loop
         # to avoid storing anytime in RAM the whole 6D tensor
         if verbose:
             print('EM, iteration %d' % (it+1))
 
-        for j in range(nb_sources):
-            # update the spectrogram model for source j
-            v[..., j], R[..., j] = get_local_gaussian_model(
-                y[..., j],
-                eps)
+        v, R = get_local_gaussian_model(y.transpose(
+            2, 3).reshape(nb_frames, -1, nb_channels), eps)
+        v, R = v.view(nb_frames, nb_bins, nb_sources), R.view(
+            nb_bins, nb_sources, nb_channels, nb_channels).permute(0, 2, 3, 1)
 
-        for t in range(nb_frames):
-            Cxx = get_mix_model(v[None, t, ...], R)
-            Cxx += regularization
-            inv_Cxx = _invert(Cxx, eps)
-            # separate the sources
-            for j in range(nb_sources):
-                W_j = wiener_gain(v[None, t, ..., j], R[..., j], inv_Cxx)
-                y[t, ..., j] = apply_filter(x[None, t, ...], W_j)[0]
+        Cxx = get_mix_model(v, R).add(regularization)
+        inv_Cxx = _invert(Cxx, eps)
+
+        W = wiener_gain(
+            v.view(nb_frames, -1),
+            R.permute(0, 3, 1, 2).reshape(-1, nb_channels, nb_channels),
+            inv_Cxx
+        )
+        y = apply_filter(x, W)
 
     return y, v, R
 
@@ -192,13 +194,13 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     Parameters
     ----------
 
-    v: np.ndarray [shape=(nb_frames, nb_bins, {1,nb_channels}, nb_sources)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, {1,nb_channels}, nb_sources)]
         spectrograms of the sources. This is a nonnegative tensor that is
         usually the output of the actual separation method of the user. The
         spectrograms may be mono, but they need to be 4-dimensional in all
         cases.
 
-    x: np.ndarray [complex, shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [complex, shape=(nb_frames, nb_bins, nb_channels)]
         STFT of the mixture signal.
 
     iterations: int [scalar]
@@ -222,7 +224,7 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     Returns
     -------
 
-    y: np.ndarray
+    y: torch.Tensor
             [complex, shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
         STFT of estimated sources
 
@@ -249,20 +251,20 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     if use_softmask:
         y = softmask(v, x, eps=eps)
     else:
-        y = v * np.exp(1j*np.angle(x[..., None]))
+        y = v * torch.exp(1j * torch.angle(x[..., None]))
 
     if not iterations:
         return y
 
     # we need to refine the estimates. Scales down the estimates for
     # numerical stability
-    max_abs = max(1, np.abs(x).max()/10.)
+    max_abs = max(1, x.abs().max() * 0.1)
     x /= max_abs
-    y = expectation_maximization(y/max_abs, x, iterations, eps=eps)[0]
-    return y*max_abs
+    y = expectation_maximization(y / max_abs, x, iterations, eps=eps)[0]
+    return y * max_abs
 
 
-def softmask(v, x, logit=None, eps=None):
+def softmask(v: torch.Tensor, x: torch.Tensor, logit: torch.Tensor = None):
     """Separates a mixture with a ratio mask, using the provided sources
     spectrograms estimates. Additionally allows compressing the mask with
     a logit function for soft binarization.
@@ -285,10 +287,10 @@ def softmask(v, x, logit=None, eps=None):
 
     Parameters
     ----------
-    v: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
         spectrograms of the sources
 
-    x: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
         mixture signal
 
     logit: {None, float between 0 and 1}
@@ -298,21 +300,20 @@ def softmask(v, x, logit=None, eps=None):
 
     Returns
     -------
-    ndarray, shape=(nb_frames, nb_bins, nb_channels, nb_sources)
+    Tensor, shape=(nb_frames, nb_bins, nb_channels, nb_sources)
         estimated sources
 
     """
     # to avoid dividing by zero
-    if eps is None:
-        eps = np.finfo(np.real(x[0]).dtype).eps
-    total_energy = np.sum(v, axis=-1, keepdims=True)
-    filter = v/(eps + total_energy.astype(x.dtype))
+    eps = torch.finfo(x.dtype).eps
+    total_energy = v.sum(-1, keepdim=True)
+    mask = v / (eps + total_energy)
     if logit is not None:
-        filter = compress_filter(filter, eps, thresh=logit, multichannel=False)
-    return filter * x[..., None]
+        mask = compress_filter(filter, eps, thresh=logit, multichannel=False)
+    return mask * x[..., None]
 
 
-def _invert(M, eps):
+def _invert(M: torch.Tensor, eps):
     """
     Invert matrices, with special fast handling of the 1x1 and 2x2 cases.
 
@@ -321,7 +322,7 @@ def _invert(M, eps):
 
     Parameters
     ----------
-    M: np.ndarray [shape=(..., nb_channels, nb_channels)]
+    M: torch.Tensor [shape=(..., nb_channels, nb_channels)]
         matrices to invert: must be square along the last two dimensions
 
     eps: [scalar]
@@ -330,32 +331,30 @@ def _invert(M, eps):
 
     Returns
     -------
-    invM: np.ndarray, [shape=M.shape]
+    invM: torch.Tensor, [shape=M.shape]
         inverses of M
     """
     nb_channels = M.shape[-1]
     if nb_channels == 1:
         # scalar case
-        invM = 1.0/(M+eps)
+        invM = M.add(eps).reciprocal()
     elif nb_channels == 2:
         # two channels case: analytical expression
-        det = (
-            M[..., 0, 0]*M[..., 1, 1] -
-            M[..., 0, 1]*M[..., 1, 0])
+        det = M[..., 0, 0] * M[..., 1, 1] - M[..., 0, 1] * M[..., 1, 0]
 
-        invDet = 1.0/(det)
-        invM = np.empty_like(M)
-        invM[..., 0, 0] = invDet*M[..., 1, 1]
-        invM[..., 1, 0] = -invDet*M[..., 1, 0]
-        invM[..., 0, 1] = -invDet*M[..., 0, 1]
-        invM[..., 1, 1] = invDet*M[..., 0, 0]
+        invDet = det.reciprocal()
+        invM = torch.empty_like(M)
+        invM[..., 0, 0] = invDet * M[..., 1, 1]
+        invM[..., 1, 0] = -invDet * M[..., 1, 0]
+        invM[..., 0, 1] = -invDet * M[..., 0, 1]
+        invM[..., 1, 1] = invDet * M[..., 0, 0]
     else:
         # general case : no use of analytical expression (slow!)
-        invM = np.linalg.pinv(M, eps)
+        invM = torch.linalg.pinv(M, eps)
     return invM
 
 
-def wiener_gain(v_j, R_j, inv_Cxx):
+def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
     """
     Compute the wiener gain for separating one source, given all parameters.
     It is the matrix applied to the mix to get the posterior mean of the source
@@ -370,110 +369,93 @@ def wiener_gain(v_j, R_j, inv_Cxx):
 
     Parameters
     ----------
-    v_j: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    v_j: torch.Tensor [shape=(nb_frames, nb_bins)]
         power spectral density of the target source.
 
-    R_j: np.ndarray [shape=(nb_bins, nb_channels, nb_channels)]
+    R_j: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels)]
         spatial covariance matrix of the target source
 
-    inv_Cxx: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    inv_Cxx: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         inverse of the mixture covariance matrices
 
     Returns
     -------
 
-    G: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    G: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         wiener filtering matrices, to apply to the mix, e.g. through
         :func:`apply_filter` to get the target source estimate.
 
     """
-    (_, nb_channels) = R_j.shape[:2]
-
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = np.zeros_like(inv_Cxx)
-    for (i1, i2, i3) in itertools.product(*(range(nb_channels),)*3):
-        G[..., i1, i2] += (R_j[None, :, i1, i3] * inv_Cxx[..., i3, i2])
-    G *= v_j[..., None, None]
+    G = torch.einsum('nb,bcd,nbde->nbce', v_j, R_j, inv_Cxx)
     return G
 
 
-def apply_filter(x, W):
+def apply_filter(x: torch.Tensor, W: torch.Tensor):
     """
     Applies a filter on the mixture. Just corresponds to a matrix
     multiplication.
 
     Parameters
     ----------
-    x: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
         STFT of the signal on which to apply the filter.
 
-    W: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    W: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         filtering matrices, as returned, e.g. by :func:`wiener_gain`
 
     Returns
     -------
-    y_hat: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    y_hat: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
         filtered signal
     """
-    nb_channels = W.shape[-1]
-
-    # apply the filter
-    y_hat = 0+0j
-    for i in range(nb_channels):
-        y_hat += W[..., i] * x[..., i, None]
-    return y_hat
+    batch, bins, nb_channels = x.shape
+    x, W = x.view(-1, nb_channels, 1), W.view(-1, nb_channels, nb_channels)
+    y_hat = W @ x
+    return y_hat.view(batch, bins, nb_channels)
 
 
-def get_mix_model(v, R):
+def get_mix_model(v: torch.Tensor, R: torch.Tensor):
     """
     Compute the model covariance of a mixture based on local Gaussian models.
     simply adds up all the v[..., j] * R[..., j]
 
     Parameters
     ----------
-    v: np.ndarray [shape=(nb_frames, nb_bins, nb_sources)]
+    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_sources)]
         Power spectral densities for the sources
 
-    R: np.ndarray [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
+    R: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
         Spatial covariance matrices of each sources
 
     Returns
     -------
-    Cxx: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    Cxx: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         Covariance matrix for the mixture
     """
-    nb_channels = R.shape[1]
-    (nb_frames, nb_bins, nb_sources) = v.shape
-    Cxx = np.zeros((nb_frames, nb_bins, nb_channels, nb_channels), R.dtype)
-    for j in range(nb_sources):
-        Cxx += v[..., j, None, None] * R[None, ..., j]
+    Cxx = torch.einsum('nbs,bcds->nbcd', v, R)
     return Cxx
 
 
-def _covariance(y_j):
+def _covariance(y_j: torch.Tensor):
     """
     Compute the empirical covariance for a source.
 
     Parameters
     ----------
-    y_j: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)].
+    y_j: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)].
           complex stft of the source.
 
     Returns
     -------
-    Cj: np.ndarray [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    Cj: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
         just y_j * conj(y_j.T): empirical covariance for each TF bin.
     """
-    (nb_frames, nb_bins, nb_channels) = y_j.shape
-    Cj = np.zeros((nb_frames, nb_bins, nb_channels, nb_channels),
-                  y_j.dtype)
-    for (i1, i2) in itertools.product(*(range(nb_channels),)*2):
-        Cj[..., i1, i2] += y_j[..., i1] * np.conj(y_j[..., i2])
-
+    Cj = y_j.unsqueeze(-1) * y_j.unsqueeze(-2).conj()
     return Cj
 
 
-def get_local_gaussian_model(y_j, eps=1.):
+def get_local_gaussian_model(y_j: torch.Tensor, eps=1.):
     r"""
     Compute the local Gaussian model [1]_ for a source given the complex STFT.
     First get the power spectral densities, and then the spatial covariance
@@ -492,28 +474,21 @@ def get_local_gaussian_model(y_j, eps=1.):
 
     Parameters
     ----------
-    y_j: np.ndarray [shape=(nb_frames, nb_bins, nb_channels)]
+    y_j: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
           complex stft of the source.
     eps: float [scalar]
         regularization term
 
     Returns
     -------
-    v_j: np.ndarray [shape=(nb_frames, nb_bins)]
+    v_j: torch.Tensor [shape=(nb_frames, nb_bins)]
         power spectral density of the source
-    R_J: np.ndarray [shape=(nb_bins, nb_channels, nb_channels)]
+    R_J: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels)]
         Spatial covariance matrix of the source
 
     """
 
-    v_j = np.mean(np.abs(y_j)**2, axis=2)
-
-    # updates the spatial covariance matrix
-    nb_frames = y_j.shape[0]
-    R_j = 0
-    weight = eps
-    for t in range(nb_frames):
-        R_j += _covariance(y_j[None, t, ...])
-        weight += v_j[None, t, ...]
-    R_j /= weight[..., None, None]
+    v_j = y_j.abs().pow(2).mean(2)
+    weight = v_j.sum(0) + eps
+    R_j = _covariance(y_j).sum(0) / weight[:, None, None]
     return v_j, R_j
