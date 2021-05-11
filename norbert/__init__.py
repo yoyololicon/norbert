@@ -51,10 +51,10 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
     Parameters
     ----------
-    y: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    y: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources)]
         initial estimates for the sources
 
-    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         complex STFT of the mixture signal
 
     iterations: int [scalar]
@@ -69,13 +69,13 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
     Returns
     -------
-    y: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    y: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources)]
         estimated sources after iterations
 
-    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_sources)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_sources)]
         estimated power spectral densities
 
-    R: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
+    R: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels, nb_sources)]
         estimated spatial covariance matrices
 
 
@@ -115,7 +115,7 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
         eps = torch.finfo(x.dtype).eps
 
     # dimensions
-    (nb_frames, nb_bins, nb_channels) = x.shape
+    (batch, nb_frames, nb_bins, nb_channels) = x.shape
     nb_sources = y.shape[-1]
 
     # allocate the spatial covariance matrices and PSD
@@ -133,9 +133,9 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
             print('EM, iteration %d' % (it+1))
 
         v, R = get_local_gaussian_model(y.transpose(
-            2, 3).reshape(nb_frames, -1, nb_channels), eps)
-        v, R = v.view(nb_frames, nb_bins, nb_sources), R.view(
-            nb_bins, nb_sources, nb_channels, nb_channels).permute(0, 2, 3, 1)
+            3, 4).reshape(batch, nb_frames, -1, nb_channels), eps)
+        v, R = v.view(batch, nb_frames, nb_bins, nb_sources), R.view(batch, nb_bins, nb_sources, nb_channels,
+                                                                     nb_channels).permute(0, 1, 3, 4, 2)
 
         Cxx = get_mix_model(v, R).add(regularization)
         inv_Cxx = _invert(Cxx, eps)
@@ -193,13 +193,13 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     Parameters
     ----------
 
-    v: torch.Tensor [shape=(nb_frames, nb_bins, {1,nb_channels}, nb_sources)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, {1,nb_channels}, nb_sources)]
         spectrograms of the sources. This is a nonnegative tensor that is
         usually the output of the actual separation method of the user. The
         spectrograms may be mono, but they need to be 4-dimensional in all
         cases.
 
-    x: torch.Tensor [complex, shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [complex, shape=(batch, nb_frames, nb_bins, nb_channels)]
         STFT of the mixture signal.
 
     iterations: int [scalar]
@@ -224,7 +224,7 @@ def wiener(v, x, iterations=1, use_softmask=True, eps=None):
     -------
 
     y: torch.Tensor
-            [complex, shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+            [complex, shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources)]
         STFT of estimated sources
 
     Note
@@ -286,10 +286,10 @@ def softmask(v: torch.Tensor, x: torch.Tensor, logit: torch.Tensor = None):
 
     Parameters
     ----------
-    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources)]
         spectrograms of the sources
 
-    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         mixture signal
 
     logit: {None, float between 0 and 1}
@@ -299,7 +299,7 @@ def softmask(v: torch.Tensor, x: torch.Tensor, logit: torch.Tensor = None):
 
     Returns
     -------
-    Tensor, shape=(nb_frames, nb_bins, nb_channels, nb_sources)
+    Tensor, shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources)
         estimated sources
 
     """
@@ -368,25 +368,25 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
 
     Parameters
     ----------
-    v_j: torch.Tensor [shape=(nb_frames, nb_bins)]
+    v_j: torch.Tensor [shape=(batch, nb_frames, nb_bins)]
         power spectral density of the target source.
 
-    R_j: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels)]
+    R_j: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels)]
         spatial covariance matrix of the target source
 
-    inv_Cxx: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    inv_Cxx: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
         inverse of the mixture covariance matrices
 
     Returns
     -------
 
-    G: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    G: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
         wiener filtering matrices, to apply to the mix, e.g. through
         :func:`apply_filter` to get the target source estimate.
 
     """
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = torch.einsum('nb,bcd,nbde->nbce', v_j, R_j, inv_Cxx)
+    G = torch.einsum('znb,zbcd,znbde->znbce', v_j, R_j, inv_Cxx)
     return G
 
 
@@ -397,22 +397,22 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
 
     Parameters
     ----------
-    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         STFT of the signal on which to apply the filter.
 
-    W: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    W: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
         filtering matrices, as returned, e.g. by :func:`wiener_gain`
 
     Returns
     -------
-    y_hat: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    y_hat: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         filtered signal
     """
-    batch, bins, nb_channels = x.shape
+    *batch, bins, nb_channels = x.shape
     x, W = x.view(-1, nb_channels, 1), W.view(-1,
                                               nb_channels, nb_channels)
     y_hat = W @ x
-    return y_hat.view(batch, bins, nb_channels)
+    return y_hat.view(*batch, bins, nb_channels)
 
 
 def get_mix_model(v: torch.Tensor, R: torch.Tensor):
@@ -422,20 +422,20 @@ def get_mix_model(v: torch.Tensor, R: torch.Tensor):
 
     Parameters
     ----------
-    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_sources)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_sources)]
         Power spectral densities for the sources
 
-    R: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels, nb_sources)]
+    R: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels, nb_sources)]
         Spatial covariance matrices of each sources
 
     Returns
     -------
-    Cxx: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    Cxx: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
         Covariance matrix for the mixture
     """
     if R.is_complex():
         v = v.to(R.dtype)
-    Cxx = torch.einsum('nbs,bcds->nbcd', v, R)
+    Cxx = torch.einsum('znbs,zbcds->znbcd', v, R)
     return Cxx
 
 
@@ -445,12 +445,12 @@ def _covariance(y_j: torch.Tensor):
 
     Parameters
     ----------
-    y_j: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)].
+    y_j: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)].
           complex stft of the source.
 
     Returns
     -------
-    Cj: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_channels)]
+    Cj: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
         just y_j * conj(y_j.T): empirical covariance for each TF bin.
     """
     Cj = y_j.unsqueeze(-1) * y_j.unsqueeze(-2).conj()
@@ -476,21 +476,21 @@ def get_local_gaussian_model(y_j: torch.Tensor, eps=1.):
 
     Parameters
     ----------
-    y_j: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    y_j: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
           complex stft of the source.
     eps: float [scalar]
         regularization term
 
     Returns
     -------
-    v_j: torch.Tensor [shape=(nb_frames, nb_bins)]
+    v_j: torch.Tensor [shape=(batch, nb_frames, nb_bins)]
         power spectral density of the source
-    R_J: torch.Tensor [shape=(nb_bins, nb_channels, nb_channels)]
+    R_J: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels)]
         Spatial covariance matrix of the source
 
     """
 
-    v_j = y_j.abs().pow(2).mean(2)
-    weight = v_j.sum(0) + eps
-    R_j = _covariance(y_j).sum(0) / weight[:, None, None]
+    v_j = y_j.abs().pow(2).mean(3)
+    weight = v_j.sum(1) + eps
+    R_j = _covariance(y_j).sum(1) / weight[..., None, None]
     return v_j, R_j

@@ -33,16 +33,21 @@ def dtype(request):
     return request.param
 
 
+@pytest.fixture(params=[1, 2, 3])
+def batch(request):
+    return request.param
+
+
 @pytest.fixture
-def X(request, nb_frames, nb_bins, nb_channels, dtype):
-    Mix = torch.randn(nb_frames, nb_bins, nb_channels) + \
-        torch.randn(nb_frames, nb_bins, nb_channels) * 1j
+def X(request, batch, nb_frames, nb_bins, nb_channels, dtype):
+    Mix = torch.randn(batch, nb_frames, nb_bins, nb_channels) + \
+        torch.randn(batch, nb_frames, nb_bins, nb_channels) * 1j
     return Mix.to(dtype)
 
 
 @pytest.fixture
-def V(request, nb_frames, nb_bins, nb_channels, nb_sources):
-    return torch.rand(nb_frames, nb_bins, nb_channels, nb_sources, requires_grad=True)
+def V(request, batch, nb_frames, nb_bins, nb_channels, nb_sources):
+    return torch.rand(batch, nb_frames, nb_bins, nb_channels, nb_sources, requires_grad=True)
 
 
 def test_shapes(V, X):
