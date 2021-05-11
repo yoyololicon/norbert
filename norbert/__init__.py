@@ -409,8 +409,8 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
         filtered signal
     """
     batch, bins, nb_channels = x.shape
-    x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
-                                                    nb_channels, nb_channels)
+    x, W = x.view(-1, nb_channels, 1), W.view(-1,
+                                              nb_channels, nb_channels)
     y_hat = W @ x
     return y_hat.view(batch, bins, nb_channels)
 
