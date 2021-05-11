@@ -139,7 +139,6 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
 
         Cxx = get_mix_model(v, R).add(regularization)
         inv_Cxx = _invert(Cxx, eps)
-        print(inv_Cxx.shape, v.shape, R.shape)
 
         y = []
         for j in range(nb_sources):
