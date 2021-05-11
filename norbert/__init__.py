@@ -1,6 +1,7 @@
 import torch
 import math
-from .contrib import compress_filter
+from .contrib import compress_filter, residual_model
+import opt_einsum as oe
 
 
 def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
@@ -386,7 +387,8 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
 
     """
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = torch.einsum('nb,bcd,nbde->nbce', v_j, R_j, inv_Cxx)
+    #G = torch.einsum('nb,bcd,nbde->nbce', v_j, R_j, inv_Cxx)
+    G = oe.contract('nb,bcd,nbde->nbce', v_j, R_j, inv_Cxx, backend='torch')
     return G
 
 
@@ -409,7 +411,8 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
         filtered signal
     """
     batch, bins, nb_channels = x.shape
-    x, W = x.view(-1, nb_channels, 1), W.view(-1, nb_channels, nb_channels)
+    x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
+                                                    nb_channels, nb_channels)
     y_hat = W @ x
     return y_hat.view(batch, bins, nb_channels)
 
@@ -434,7 +437,8 @@ def get_mix_model(v: torch.Tensor, R: torch.Tensor):
     """
     if R.is_complex():
         v = v.to(R.dtype)
-    Cxx = torch.einsum('nbs,bcds->nbcd', v, R)
+    #Cxx = torch.einsum('nbs,bcds->nbcd', v, R)
+    Cxx = oe.contract('nbs,bcds->nbcd', v, R, backend='torch')
     return Cxx
 
 
