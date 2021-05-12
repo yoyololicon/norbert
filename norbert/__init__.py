@@ -386,7 +386,7 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
 
     """
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = torch.einsum('znb,zbcd,znbde->znbce', v_j, R_j, inv_Cxx)
+    G = torch.einsum('zbcd,znbde->znbce', R_j, v_j[..., None, None] * inv_Cxx)
     return G
 
 
@@ -409,8 +409,8 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
         filtered signal
     """
     *batch, bins, nb_channels = x.shape
-    x, W = x.view(-1, nb_channels, 1), W.view(-1,
-                                              nb_channels, nb_channels)
+    x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
+                                                    nb_channels, nb_channels)
     y_hat = W @ x
     return y_hat.view(*batch, bins, nb_channels)
 
