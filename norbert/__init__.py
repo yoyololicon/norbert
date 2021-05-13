@@ -379,7 +379,8 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
 
     """
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = torch.einsum('znbs,zbcds,znbde->znbces', v_j, R_j, inv_Cxx)
+    G = torch.einsum('zbcds,znbde->znbces', R_j, inv_Cxx) * \
+        v_j[..., None, None, :]
     return G
 
 
