@@ -402,11 +402,11 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
     y_hat: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         filtered signal
     """
-    y_hat = torch.einsum('...c,...cds->...ds', x, W)
-    # x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
-    #                                                nb_channels, nb_channels, nb_sources)
-    #y_hat = W @ x
-    return y_hat
+    W = W.permute(0, 1, 2, 5, 3, 4)
+    x = x[..., None, :, None]
+    y_hat = W @ x
+    y_hat = y_hat.squeeze(-1).permute(0, 1, 2, 4, 3)
+    return y_hat.contiguous()
 
 
 def get_mix_model(v: torch.Tensor, R: torch.Tensor):
