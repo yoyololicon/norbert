@@ -140,15 +140,8 @@ def expectation_maximization(y, x, iterations=2, verbose=0, eps=None):
         Cxx = get_mix_model(v, R).add(regularization)
         inv_Cxx = _invert(Cxx, eps)
 
-        y = []
-        for j in range(nb_sources):
-            W = wiener_gain(
-                v[..., j],
-                R[..., j],
-                inv_Cxx
-            )
-            y.append(apply_filter(x, W))
-        y = torch.stack(y, -1)
+        W = wiener_gain(v, R, inv_Cxx)
+        y = apply_filter(x, W)
 
     return y, v, R
 
@@ -368,10 +361,10 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
 
     Parameters
     ----------
-    v_j: torch.Tensor [shape=(batch, nb_frames, nb_bins)]
+    v_j: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_sources)]
         power spectral density of the target source.
 
-    R_j: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels)]
+    R_j: torch.Tensor [shape=(batch, nb_bins, nb_channels, nb_channels, nb_sources)]
         spatial covariance matrix of the target source
 
     inv_Cxx: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
@@ -380,13 +373,13 @@ def wiener_gain(v_j: torch.Tensor, R_j: torch.Tensor, inv_Cxx: torch.Tensor):
     Returns
     -------
 
-    G: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
+    G: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels, nb_sources)]
         wiener filtering matrices, to apply to the mix, e.g. through
         :func:`apply_filter` to get the target source estimate.
 
     """
     # computes multichannel Wiener gain as v_j R_j inv_Cxx
-    G = torch.einsum('zbcd,znbde->znbce', R_j, v_j[..., None, None] * inv_Cxx)
+    G = torch.einsum('znbs,zbcds,znbde->znbces', v_j, R_j, inv_Cxx)
     return G
 
 
@@ -400,7 +393,7 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
     x: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         STFT of the signal on which to apply the filter.
 
-    W: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels)]
+    W: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_channels, nb_sources)]
         filtering matrices, as returned, e.g. by :func:`wiener_gain`
 
     Returns
@@ -408,11 +401,11 @@ def apply_filter(x: torch.Tensor, W: torch.Tensor):
     y_hat: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         filtered signal
     """
-    *batch, bins, nb_channels = x.shape
-    x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
-                                                    nb_channels, nb_channels)
-    y_hat = W @ x
-    return y_hat.view(*batch, bins, nb_channels)
+    y_hat = torch.einsum('...c,...cds->...ds', x, W)
+    # x, W = x.reshape(-1, nb_channels, 1), W.reshape(-1,
+    #                                                nb_channels, nb_channels, nb_sources)
+    #y_hat = W @ x
+    return y_hat
 
 
 def get_mix_model(v: torch.Tensor, R: torch.Tensor):
