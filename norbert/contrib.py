@@ -22,10 +22,10 @@ def residual_model(v, x, alpha=1, autoscale=False):
 
     Parameters
     ----------
-    v: torch.Tensor [shape=(nb_frames, nb_bins, {1, nb_channels}, nb_sources)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, {1, nb_channels}, nb_sources)]
         Estimated spectrograms for the sources
 
-    x: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels)]
+    x: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels)]
         complex mixture
 
     alpha: float [scalar]
@@ -39,7 +39,7 @@ def residual_model(v, x, alpha=1, autoscale=False):
 
     Returns
     -------
-    v: torch.Tensor [shape=(nb_frames, nb_bins, nb_channels, nb_sources+1)]
+    v: torch.Tensor [shape=(batch, nb_frames, nb_bins, nb_channels, nb_sources+1)]
         Spectrograms of the sources, with an appended one for the residual.
 
     Note
@@ -63,8 +63,8 @@ def residual_model(v, x, alpha=1, autoscale=False):
 
     if autoscale:
         # quick trick to scale the provided spectrograms to fit the mixture
-        gain = torch.sum(vx * v_total, 0)
-        weights = torch.sum(v_total * v_total, 0).add_(eps)
+        gain = torch.sum(vx * v_total, 1)
+        weights = torch.sum(v_total * v_total, 1).add_(eps)
         gain /= weights
         v *= gain[..., None]
 
@@ -74,7 +74,7 @@ def residual_model(v, x, alpha=1, autoscale=False):
     # residual is difference between the observation and the model
     vr = (vx - v_total).relu()
 
-    return torch.cat((v, vr[..., None]), axis=3)
+    return torch.cat((v, vr[..., None]), axis=4)
 
 
 def smooth(v, width=1, temporal=False):
